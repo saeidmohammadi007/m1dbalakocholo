@@ -9,7 +9,7 @@ import ccxt
 
 # --- الگوی مرجع: تک‌کندل روزانه BTC ---
 PATTERN_SYMBOL = 'BTC-USD'
-PATTERN_DATE   = '2024-02-05'
+PATTERN_DATE   = '2020-10-16'      # ✅ تاریخ مرجع تغییر کرد
 SHOW_N         = 10
 
 # ---------- توابع ----------
@@ -38,7 +38,7 @@ def get_lbank_futures_symbols():
     print(f"✅ تعداد ارزهای پایه‌ی منحصربه‌فرد فیوچرز LBank: {len(unique_bases)}")
     return unique_bases
 
-def get_daily_data(ticker, start='2024-01-01'):
+def get_daily_data(ticker, start='2020-01-01'):   # ✅ شروع داده عقب‌تر رفت
     """داده‌ی روزانه فقط برای استخراج کندل الگو"""
     df = yf.download(ticker, start=start, interval='1d',
                      progress=False, auto_adjust=False)
@@ -105,7 +105,7 @@ def send_telegram_message(text):
 
 # ---------- اجرای اصلی ----------
 print(f"🔍 استخراج کندل مرجع {PATTERN_SYMBOL} در تاریخ {PATTERN_DATE} (روزانه) ...")
-ref_daily = get_daily_data(PATTERN_SYMBOL, start='2024-01-01')
+ref_daily = get_daily_data(PATTERN_SYMBOL, start='2020-01-01')   # ✅
 if ref_daily is None:
     print(f"❌ خطا در دریافت داده‌های {PATTERN_SYMBOL}")
     exit()
