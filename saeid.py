@@ -7,9 +7,9 @@ import time
 import requests
 import ccxt
 
-# --- الگوی مرجع: تک‌کندل روزانه ETH ---
+# --- الگوهای مرجع: تک‌کندل روزانه ETH ---
 PATTERN_SYMBOL = 'ETH-USD'
-PATTERN_DATE   = '2025-07-04'
+PATTERN_DATES  = ['2025-07-04', '2022-10-15']   # ← دو تاریخ مرجع
 SHOW_N         = 10
 
 # ---------- توابع ----------
@@ -38,7 +38,7 @@ def get_lbank_futures_symbols():
     print(f"✅ تعداد ارزهای پایه‌ی منحصربه‌فرد فیوچرز LBank: {len(unique_bases)}")
     return unique_bases
 
-def get_daily_data(ticker, start='2024-01-01'):
+def get_daily_data(ticker, start='2020-01-01'):
     df = yf.download(ticker, start=start, interval='1d',
                      progress=False, auto_adjust=False)
     if df.empty:
@@ -46,9 +46,27 @@ def get_daily_data(ticker, start='2024-01-01'):
     df = df[['Open', 'High', 'Low', 'Close']].copy()
     df.index = pd.to_datetime(df.index)
     df.columns = ['open', 'high', 'low', 'close']
+    return df
+
+def get_4h_data(ticker):
+    df = yf.download(ticker, period='60d', interval='1h',
+                     progress=False, auto_adjust=False)
+    if df.empty:
+        return None
+    df = df[['Open', 'High', 'Low', 'Close']].copy()
+    df.index = pd.to_datetime(df.index)
+    df.columns = ['open', 'high', 'low', 'close']
+
     if df.index.tz is not None:
         df.index = df.index.tz_localize(None)
-    return df
+
+    df_4h = df.resample('4h').agg({
+        'open':   'first',
+        'high':   'max',
+        'low':    'min',
+        'close':  'last',
+    }).dropna()
+    return df_4h
 
 def candle_vector(o, h, l, c):
     """بردار ۴بعدی نرمال‌شده‌ی کندل نسبت به دامنه High−Low"""
@@ -87,29 +105,42 @@ def send_telegram_message(text):
     except Exception as e:
         print(f"❌ خطا در ارسال به تلگرام: {e}")
 
-# ---------- اجرای اصلی ----------
-print(f"🔍 استخراج کندل مرجع {PATTERN_SYMBOL} در تاریخ {PATTERN_DATE} (روزانه) ...")
-ref_daily = get_daily_data(PATTERN_SYMBOL, start='2024-01-01')
+# ---------- استخراج الگوهای مرجع ----------
+print(f"🔍 استخراج کندل‌های مرجع {PATTERN_SYMBOL} (روزانه) ...")
+ref_daily = get_daily_data(PATTERN_SYMBOL, start='2020-01-01')
 if ref_daily is None:
     print(f"❌ خطا در دریافت داده‌های {PATTERN_SYMBOL}")
     exit()
 
-target_date = pd.to_datetime(PATTERN_DATE).date()
-mask = ref_daily.index.date == target_date
-if not mask.any():
-    print(f"❌ کندلی برای تاریخ {PATTERN_DATE} یافت نشد.")
+patterns = []   # لیستی از دیکشنری‌های الگو
+for pdate in PATTERN_DATES:
+    target_date = pd.to_datetime(pdate).date()
+    mask = ref_daily.index.date == target_date
+    if not mask.any():
+        print(f"⚠️ کندلی برای تاریخ {pdate} یافت نشد. رد شد.")
+        continue
+    cnd = ref_daily[mask].iloc[0]
+    vec = candle_vector(cnd['open'], cnd['high'],
+                        cnd['low'],   cnd['close'])
+    if vec is None:
+        print(f"⚠️ کندل مرجع {pdate} نامعتبر است. رد شد.")
+        continue
+    patterns.append({
+        'date': pdate,
+        'o': float(cnd['open']),
+        'h': float(cnd['high']),
+        'l': float(cnd['low']),
+        'c': float(cnd['close']),
+        'vec': vec,
+    })
+    print(f"📌 کندل مرجع {pdate}: O={cnd['open']:.4f}  H={cnd['high']:.4f}  "
+          f"L={cnd['low']:.4f}  C={cnd['close']:.4f}")
+
+if not patterns:
+    print("❌ هیچ الگوی مرجع معتبری یافت نشد.")
     exit()
 
-candle = ref_daily[mask].iloc[0]
-o, h, l, c = candle['open'], candle['high'], candle['low'], candle['close']
-pattern_vec = candle_vector(o, h, l, c)
-if pattern_vec is None:
-    print("❌ کندل مرجع نامعتبر است.")
-    exit()
-
-print(f"📌 کندل مرجع (روزانه): O={o:.4f}  H={h:.4f}  L={l:.4f}  C={c:.4f}")
-print(f"📐 بردار الگو: O={pattern_vec[0]:.3f} | H={pattern_vec[1]:.3f} | "
-      f"L={pattern_vec[2]:.3f} | C={pattern_vec[3]:.3f}")
+print(f"\n✅ تعداد الگوهای مرجع: {len(patterns)}")
 
 print("\n📊 دریافت نمادهای فیوچرز LBank ...")
 symbols = get_lbank_futures_symbols()
@@ -118,35 +149,41 @@ if not symbols:
     exit()
 
 results = []
-for sym in tqdm(symbols, desc="اسکن کندل روزانه (قبلی)"):
+for sym in tqdm(symbols, desc="اسکن کندل ۴ ساعته (قبلی)"):
     try:
-        df_1d = get_daily_data(f"{sym}-USD", start='2024-01-01')
-        if df_1d is None or len(df_1d) < 35:   # حداقل داده برای MACD
+        df_4h = get_4h_data(f"{sym}-USD")
+        if df_4h is None or len(df_4h) < 35:   # حداقل داده برای MACD
             continue
 
-        # ---------- ✅ شرط MACD: خط MACD بالای خط Signal باشد ----------
-        macd_line, signal_line = compute_macd(df_1d['close'])
+        # ---------- شرط MACD: خط MACD بالای خط Signal باشد ----------
+        macd_line, signal_line = compute_macd(df_4h['close'])
         if not (macd_line.iloc[-2] > signal_line.iloc[-2]):
             continue
         # --------------------------------------------------------------
 
-        prev = df_1d.iloc[-2]
+        prev = df_4h.iloc[-2]
         vec = candle_vector(prev['open'], prev['high'],
                             prev['low'],  prev['close'])
         if vec is None:
             continue
 
-        dist = float(np.linalg.norm(pattern_vec - vec))
+        # ---------- محاسبه فاصله تا هر الگو و انتخاب کمترین ----------
+        best = None
+        for p in patterns:
+            d = float(np.linalg.norm(p['vec'] - vec))
+            if best is None or d < best['dist']:
+                best = {'dist': d, 'pattern_date': p['date']}
 
         results.append({
-            'symbol':   sym,
-            'dist':     dist,
-            'last_1d':  df_1d.index[-2].strftime('%Y-%m-%d'),
+            'symbol':       sym,
+            'dist':         best['dist'],
+            'pattern_date': best['pattern_date'],
+            'last_4h':      df_4h.index[-2].strftime('%Y-%m-%d %H:%M'),
             'o': float(prev['open']),
             'h': float(prev['high']),
             'l': float(prev['low']),
             'c': float(prev['close']),
-            'macd': float(macd_line.iloc[-2]),
+            'macd':   float(macd_line.iloc[-2]),
             'signal': float(signal_line.iloc[-2]),
         })
         time.sleep(0.3)
@@ -157,13 +194,18 @@ if results:
     df_res = pd.DataFrame(results).sort_values('dist').head(SHOW_N)
 
     lines = []
-    lines.append(f"🏆 <b>کندل‌های روزانه (قبلی) مشابه کندل روزانه {PATTERN_SYMBOL} ({PATTERN_DATE})</b>\n")
-    lines.append(f"الگو (روزانه): O={o:.6g} | H={h:.6g} | L={l:.6g} | C={c:.6g}")
+    lines.append("🏆 <b>کندل‌های ۴ ساعته (قبلی) مشابه الگوهای روزانه ETH</b>\n")
+    for p in patterns:
+        lines.append(
+            f"الگو {p['date']}: O={p['o']:.6g} | H={p['h']:.6g} | "
+            f"L={p['l']:.6g} | C={p['c']:.6g}"
+        )
     lines.append("🔎 <i>فیلتر فعال: MACD > Signal</i>\n")
     for _, row in df_res.iterrows():
         lines.append(
-            f"🔸 <b>{row['symbol']}</b>  (فاصله: {row['dist']:.4f})\n"
-            f"   تاریخ: {row['last_1d']} | "
+            f"🔸 <b>{row['symbol']}</b>  "
+            f"(فاصله: {row['dist']:.4f} | الگو: {row['pattern_date']})\n"
+            f"   زمان ۴h: {row['last_4h']} | "
             f"O={row['o']:.6g} H={row['h']:.6g} "
             f"L={row['l']:.6g} C={row['c']:.6g}\n"
             f"   MACD={row['macd']:.4g} > Signal={row['signal']:.4g}"
