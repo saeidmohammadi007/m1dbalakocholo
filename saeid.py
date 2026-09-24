@@ -9,7 +9,7 @@ import ccxt
 
 # --- الگوهای مرجع: تک‌کندل روزانه ETH ---
 PATTERN_SYMBOL = 'ETH-USD'
-PATTERN_DATES  = ['2025-07-04', '2022-10-15']   # ← دو تاریخ مرجع
+PATTERN_DATES  = ['2025-07-04', '2022-10-15', '2021-08-03']   # ← سه تاریخ مرجع
 SHOW_N         = 10
 
 # ---------- توابع ----------
@@ -107,7 +107,12 @@ def send_telegram_message(text):
 
 # ---------- استخراج الگوهای مرجع ----------
 print(f"🔍 استخراج کندل‌های مرجع {PATTERN_SYMBOL} (روزانه) ...")
-ref_daily = get_daily_data(PATTERN_SYMBOL, start='2020-01-01')
+
+# شروع دریافت داده از کمی قبل‌تر از قدیمی‌ترین تاریخ الگو
+oldest_date = min(PATTERN_DATES)
+start_date  = (pd.to_datetime(oldest_date) - pd.Timedelta(days=5)).strftime('%Y-%m-%d')
+
+ref_daily = get_daily_data(PATTERN_SYMBOL, start=start_date)
 if ref_daily is None:
     print(f"❌ خطا در دریافت داده‌های {PATTERN_SYMBOL}")
     exit()
